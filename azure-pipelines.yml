@@ -119,7 +119,13 @@ stages:
           )
           cd backend
           echo Building backend Docker image...
-          docker build --load -t $(imageRepository)-backend:$(tag) -t $(imageRepository)-backend:latest .
+          echo Using default docker builder...
+          docker buildx use default || echo Using current builder
+          docker build -t $(imageRepository)-backend:$(tag) -t $(imageRepository)-backend:latest . --progress=plain
+          if %ERRORLEVEL% neq 0 (
+            echo Build failed, trying alternative approach...
+            docker build -t $(imageRepository)-backend:$(tag) -t $(imageRepository)-backend:latest . --no-cache
+          )
           echo Backend image built successfully!
       continueOnError: true
     
@@ -134,7 +140,13 @@ stages:
             exit /b 0
           )
           echo Building frontend Docker image...
-          docker build --load -f nginx/Dockerfile -t $(imageRepository)-frontend:$(tag) -t $(imageRepository)-frontend:latest .
+          echo Using default docker builder...
+          docker buildx use default || echo Using current builder
+          docker build -f nginx/Dockerfile -t $(imageRepository)-frontend:$(tag) -t $(imageRepository)-frontend:latest . --progress=plain
+          if %ERRORLEVEL% neq 0 (
+            echo Build failed, trying alternative approach...
+            docker build -f nginx/Dockerfile -t $(imageRepository)-frontend:$(tag) -t $(imageRepository)-frontend:latest . --no-cache
+          )
           echo Frontend image built successfully!
       continueOnError: true
     
