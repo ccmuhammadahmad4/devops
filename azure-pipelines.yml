@@ -5,7 +5,7 @@ trigger:
   branches:
     include:
       - main
-      - develop
+      - ahmad
   paths:
     exclude:
       - README.md
@@ -21,18 +21,11 @@ pr:
       - docs/*
 
 variables:
-  # Azure Container Registry details
-  dockerRegistryServiceConnection: 'your-acr-service-connection'
+  # Docker details
   imageRepository: 'fastapi-app'
-  containerRegistry: 'yourregistry.azurecr.io'
   dockerfilePath: '$(Build.SourcesDirectory)/backend/Dockerfile'
   nginxDockerfilePath: '$(Build.SourcesDirectory)/nginx/Dockerfile'
   tag: '$(Build.BuildId)'
-  
-  # Azure App Service details
-  azureSubscription: 'your-azure-subscription'
-  appName: 'your-app-service-name'
-  resourceGroupName: 'your-resource-group'
 
 stages:
 - stage: Build
@@ -41,150 +34,65 @@ stages:
   - job: BuildAndTest
     displayName: Build and Test Application
     pool:
-      vmImage: 'ubuntu-latest'
+      name: 'Default'  # Using your self-hosted Windows agent
     
     steps:
     # Checkout source code
     - checkout: self
     
-    # Set up Python environment
-    - task: UsePythonVersion@0
+    # Verify Python version (using system Python 3.13)
+    - task: PowerShell@2
+      displayName: 'Verify Python Installation'
       inputs:
-        versionSpec: '3.11'
-        displayName: 'Use Python 3.11'
+        targetType: 'inline'
+        script: |
+          python --version
+          python -m pip --version
     
     # Install Python dependencies
-    - script: |
-        cd backend
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-asyncio httpx
+    - task: PowerShell@2
       displayName: 'Install Python dependencies'
+      inputs:
+        targetType: 'inline'
+        script: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
     
     # Run Python tests (if you have any)
-    - script: |
-        cd backend
-        # python -m pytest tests/ -v --junitxml=junit/test-results.xml --cov=app --cov-report=xml
-        echo "Tests will be added here"
+    - task: PowerShell@2
       displayName: 'Run Python tests'
+      inputs:
+        targetType: 'inline'
+        script: |
+          cd backend
+          # python -m pytest tests/ -v --junitxml=junit/test-results.xml --cov=app --cov-report=xml
+          echo "Tests will be added here"
       continueOnError: true
     
     # Build Docker images
-    - task: Docker@2
+    - task: PowerShell@2
       displayName: Build Backend Docker Image
       inputs:
-        command: build
-        repository: $(imageRepository)-backend
-        dockerfile: $(dockerfilePath)
-        buildContext: $(Build.SourcesDirectory)/backend
-        tags: |
-          $(tag)
-          latest
+        targetType: 'inline'
+        script: |
+          cd backend
+          docker build -t $(imageRepository)-backend:$(tag) -t $(imageRepository)-backend:latest .
     
-    - task: Docker@2
+    - task: PowerShell@2
       displayName: Build Frontend Docker Image
       inputs:
-        command: build
-        repository: $(imageRepository)-frontend
-        dockerfile: $(nginxDockerfilePath)
-        buildContext: $(Build.SourcesDirectory)
-        tags: |
-          $(tag)
-          latest
+        targetType: 'inline'
+        script: |
+          docker build -f nginx/Dockerfile -t $(imageRepository)-frontend:$(tag) -t $(imageRepository)-frontend:latest .
     
     # Security scan (optional)
-    - script: |
-        # Add security scanning here if needed
-        echo "Security scanning can be added here"
+    - task: PowerShell@2
       displayName: 'Security Scan'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Add security scanning here if needed
+          echo "Security scanning can be added here"
       continueOnError: true
-
-- stage: Deploy
-  displayName: Deploy to Azure
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-  dependsOn: Build
-  jobs:
-  - deployment: DeployToAzure
-    displayName: Deploy to Azure Container Instances
-    pool:
-      vmImage: 'ubuntu-latest'
-    environment: 'production'
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          # Download artifacts
-          - download: current
-            displayName: 'Download build artifacts'
-          
-          # Deploy using Azure CLI
-          - task: AzureCLI@2
-            displayName: 'Deploy to Azure Container Instances'
-            inputs:
-              azureSubscription: $(azureSubscription)
-              scriptType: 'bash'
-              scriptLocation: 'inlineScript'
-              inlineScript: |
-                # Create resource group if it doesn't exist
-                az group create --name $(resourceGroupName) --location "East US"
-                
-                # Deploy container group
-                az container create \
-                  --resource-group $(resourceGroupName) \
-                  --name fastapi-app-$(tag) \
-                  --image $(containerRegistry)/$(imageRepository)-backend:$(tag) \
-                  --dns-name-label fastapi-app-$(tag) \
-                  --ports 8000 \
-                  --environment-variables CORS_ORIGINS="*" \
-                  --cpu 1 \
-                  --memory 1
-                
-                # Get the FQDN
-                BACKEND_FQDN=$(az container show --resource-group $(resourceGroupName) --name fastapi-app-$(tag) --query ipAddress.fqdn --output tsv)
-                echo "Backend deployed at: http://$BACKEND_FQDN:8000"
-                
-                # Deploy frontend with nginx
-                az container create \
-                  --resource-group $(resourceGroupName) \
-                  --name fastapi-frontend-$(tag) \
-                  --image $(containerRegistry)/$(imageRepository)-frontend:$(tag) \
-                  --dns-name-label fastapi-frontend-$(tag) \
-                  --ports 80 \
-                  --cpu 0.5 \
-                  --memory 0.5
-                
-                # Get the frontend FQDN
-                FRONTEND_FQDN=$(az container show --resource-group $(resourceGroupName) --name fastapi-frontend-$(tag) --query ipAddress.fqdn --output tsv)
-                echo "Frontend deployed at: http://$FRONTEND_FQDN"
-                
-                echo "##vso[task.setvariable variable=BACKEND_URL]http://$BACKEND_FQDN:8000"
-                echo "##vso[task.setvariable variable=FRONTEND_URL]http://$FRONTEND_FQDN"
-
-# Alternative deployment using Docker Compose (commented out)
-# - stage: DeployCompose
-#   displayName: Deploy using Docker Compose
-#   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-#   dependsOn: Build
-#   jobs:
-#   - deployment: DeployCompose
-#     displayName: Deploy with Docker Compose
-#     pool:
-#       vmImage: 'ubuntu-latest'
-#     environment: 'production'
-#     strategy:
-#       runOnce:
-#         deploy:
-#           steps:
-#           - task: AzureCLI@2
-#             displayName: 'Deploy using Azure Container Instances with Docker Compose'
-#             inputs:
-#               azureSubscription: $(azureSubscription)
-#               scriptType: 'bash'
-#               scriptLocation: 'inlineScript'
-#               inlineScript: |
-#                 # Install docker-compose
-#                 curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-#                 chmod +x /usr/local/bin/docker-compose
-#                 
-#                 # Deploy using docker-compose and Azure Container Instances
-#                 docker-compose -f docker-compose.yml up -d
