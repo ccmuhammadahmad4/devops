@@ -1,9 +1,18 @@
 # Azure DevOps Pipeline for FastAPI + Frontend Application
 trigger:
-  branches:
-    include:
-      - main
-      - ahmad
+  - main
+  - ahmad
+
+# Alternative trigger configuration
+# trigger:
+#   branches:
+#     include:
+#       - main
+#       - ahmad
+#   paths:
+#     exclude:
+#       - README.md
+#       - docs/*
 
 variables:
   imageRepository: 'fastapi-app'
