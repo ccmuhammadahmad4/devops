@@ -1,18 +1,20 @@
 # Azure DevOps Pipeline for FastAPI + Frontend Application
-trigger:
-  - main
-  - ahmad
 
-# Alternative trigger configuration
-# trigger:
-#   branches:
-#     include:
-#       - main
-#       - ahmad
-#   paths:
-#     exclude:
-#       - README.md
-#       - docs/*
+# Explicit trigger configuration
+trigger:
+  branches:
+    include:
+      - main
+      - master
+      - ahmad
+  paths:
+    exclude:
+      - README.md
+      - docs/*
+      - '*.md'
+
+# Ensure no PR triggers interfere
+pr: none
 
 variables:
   imageRepository: 'fastapi-app'
@@ -32,6 +34,19 @@ stages:
     steps:
     # Checkout source code
     - checkout: self
+    
+    # Test Trigger Working
+    - task: CmdLine@2
+      displayName: 'Pipeline Triggered Successfully'
+      inputs:
+        script: |
+          echo ================================
+          echo PIPELINE TRIGGERED FROM: $(Build.SourceBranch)
+          echo TRIGGER REASON: $(Build.Reason)
+          echo BUILD ID: $(Build.BuildId)
+          echo REPOSITORY: $(Build.Repository.Name)
+          echo COMMIT: $(Build.SourceVersion)
+          echo ================================
     
     # Verify Environment
     - task: CmdLine@2
