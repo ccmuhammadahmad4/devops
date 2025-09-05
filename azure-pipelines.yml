@@ -19,6 +19,14 @@ pr: none
 variables:
   imageRepository: 'fastapi-app'
   tag: '$(Build.BuildId)'
+  # Azure Container Registry variables
+  containerRegistry: 'fastapiacr$(Build.BuildId)'
+  dockerRegistryServiceConnection: 'acr-connection'
+  # Azure Container Instance variables
+  resourceGroupName: 'fastapi-rg'
+  location: 'East US'
+  backendContainerName: 'fastapi-backend'
+  frontendContainerName: 'fastapi-frontend'
 
 stages:
 - stage: Build
@@ -107,8 +115,8 @@ stages:
             echo ❌ Backend image build failed!
             exit /b 1
           )
-      continueOnError: true
-    
+      continueOnError: false
+
     # Build Frontend Docker Image
     - task: CmdLine@2
       displayName: 'Build Frontend Docker Image'
@@ -139,7 +147,30 @@ stages:
             dir frontend /B
             exit /b 1
           )
-      continueOnError: true
+      continueOnError: false
+
+    # Save Docker Images as Artifacts
+    - task: CmdLine@2
+      displayName: 'Save Docker Images'
+      inputs:
+        script: |
+          echo Saving Docker images as tar files...
+          docker save $(imageRepository)-backend:$(tag) -o backend-$(tag).tar
+          docker save $(imageRepository)-frontend:$(tag) -o frontend-$(tag).tar
+          echo ✅ Images saved successfully!
+
+    # Publish Docker Images as Pipeline Artifacts
+    - task: PublishPipelineArtifact@0
+      displayName: 'Publish Backend Image'
+      inputs:
+        targetPath: 'backend-$(tag).tar'
+        artifactName: 'backend-image'
+
+    - task: PublishPipelineArtifact@0
+      displayName: 'Publish Frontend Image'
+      inputs:
+        targetPath: 'frontend-$(tag).tar'
+        artifactName: 'frontend-image'
     
     # List Docker Images
     - task: CmdLine@2
@@ -165,4 +196,105 @@ stages:
           echo ✅ Dependencies: SUCCESS
           echo ✅ Tests: READY
           echo 🐳 Docker builds: Check above steps
+          echo 📦 Artifacts: Ready for deployment
           echo ================================
+
+# Deployment Stage
+- stage: Deploy
+  displayName: Deploy to Azure
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: DeployToAzure
+    displayName: Deploy Application to Azure Container Instances
+    pool:
+      name: 'muhammad-ahmad'
+      demands:
+        - Agent.Name -equals ahmad
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          # Download artifacts
+          - download: current
+            artifact: backend-image
+          - download: current
+            artifact: frontend-image
+          
+          # Load Docker images
+          - task: CmdLine@2
+            displayName: 'Load Docker Images'
+            inputs:
+              script: |
+                echo Loading Docker images from artifacts...
+                docker load -i $(Pipeline.Workspace)/backend-image/backend-$(Build.BuildId).tar
+                docker load -i $(Pipeline.Workspace)/frontend-image/frontend-$(Build.BuildId).tar
+                echo Images loaded successfully!
+                docker images | findstr $(imageRepository)
+          
+          # Azure CLI Login (requires service connection)
+          - task: AzureCLI@2
+            displayName: 'Create Azure Resources'
+            inputs:
+              azureSubscription: 'azure-subscription' # You need to create this service connection
+              scriptType: 'batch'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo Creating Azure Resource Group...
+                az group create --name $(resourceGroupName) --location "$(location)"
+                
+                echo Creating Azure Container Registry...
+                az acr create --resource-group $(resourceGroupName) --name $(containerRegistry) --sku Basic --admin-enabled true
+                
+                echo Getting ACR credentials...
+                for /f "tokens=*" %%i in ('az acr credential show --name $(containerRegistry) --resource-group $(resourceGroupName) --query "passwords[0].value" --output tsv') do set ACR_PASSWORD=%%i
+                echo ##vso[task.setvariable variable=acrPassword]%ACR_PASSWORD%
+          
+          # Push images to ACR
+          - task: CmdLine@2
+            displayName: 'Push Images to Azure Container Registry'
+            inputs:
+              script: |
+                echo Logging into Azure Container Registry...
+                echo $(acrPassword) | docker login $(containerRegistry).azurecr.io --username $(containerRegistry) --password-stdin
+                
+                echo Tagging and pushing backend image...
+                docker tag $(imageRepository)-backend:$(Build.BuildId) $(containerRegistry).azurecr.io/$(imageRepository)-backend:$(Build.BuildId)
+                docker push $(containerRegistry).azurecr.io/$(imageRepository)-backend:$(Build.BuildId)
+                
+                echo Tagging and pushing frontend image...
+                docker tag $(imageRepository)-frontend:$(Build.BuildId) $(containerRegistry).azurecr.io/$(imageRepository)-frontend:$(Build.BuildId)
+                docker push $(containerRegistry).azurecr.io/$(imageRepository)-frontend:$(Build.BuildId)
+                
+                echo ✅ Images pushed to ACR successfully!
+          
+          # Deploy to Azure Container Instances
+          - task: AzureCLI@2
+            displayName: 'Deploy to Azure Container Instances'
+            inputs:
+              azureSubscription: 'azure-subscription'
+              scriptType: 'batch'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo Creating backend container instance...
+                az container create --resource-group $(resourceGroupName) --name $(backendContainerName) --image $(containerRegistry).azurecr.io/$(imageRepository)-backend:$(Build.BuildId) --registry-login-server $(containerRegistry).azurecr.io --registry-username $(containerRegistry) --registry-password $(acrPassword) --ip-address public --ports 8000 --cpu 1 --memory 1
+                
+                echo Getting backend container IP...
+                for /f "tokens=*" %%i in ('az container show --resource-group $(resourceGroupName) --name $(backendContainerName) --query "ipAddress.ip" --output tsv') do set BACKEND_IP=%%i
+                echo Backend IP: %BACKEND_IP%
+                
+                echo Creating frontend container instance...
+                az container create --resource-group $(resourceGroupName) --name $(frontendContainerName) --image $(containerRegistry).azurecr.io/$(imageRepository)-frontend:$(Build.BuildId) --registry-login-server $(containerRegistry).azurecr.io --registry-username $(containerRegistry) --registry-password $(acrPassword) --ip-address public --ports 80 --cpu 1 --memory 1
+                
+                echo Getting frontend container IP...
+                for /f "tokens=*" %%i in ('az container show --resource-group $(resourceGroupName) --name $(frontendContainerName) --query "ipAddress.ip" --output tsv') do set FRONTEND_IP=%%i
+                echo Frontend IP: %FRONTEND_IP%
+                
+                echo ================================
+                echo 🚀 DEPLOYMENT SUCCESSFUL!
+                echo ================================
+                echo Frontend URL: http://%FRONTEND_IP%
+                echo Backend API: http://%BACKEND_IP%:8000
+                echo API Docs: http://%BACKEND_IP%:8000/docs
+                echo ================================
