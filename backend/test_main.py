@@ -5,7 +5,7 @@ from app.main import app
 client = TestClient(app)
 
 def test_root():
-    """Test root endpoint"""
+    """Test root endpoint and push"""
     response = client.get("/")
     assert response.status_code == 200
     data = response.json()
