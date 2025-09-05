@@ -35,13 +35,19 @@ stages:
     
     # Verify Environment
     - task: CmdLine@2
-      displayName: 'Verify Environment'
+      displayName: 'Verify Environment (Updated)'
       inputs:
         script: |
+          echo ================================
+          echo PIPELINE VERSION: September 5, 2025
+          echo ================================
           echo OS: %OS%
           echo Agent: %AGENT_NAME%
+          echo Python version:
           python --version
+          echo Docker version:
           docker --version
+          echo ================================
     
     # Check Project Files
     - task: CmdLine@2
